@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>リフレックス・グリッド</title>
+<style>
+  :root {
+    --bg: #0f1020;
+    --panel: #1a1c33;
+    --cell: #272a45;
+    --accent: #ffd166;
+    --hit: #06d6a0;
+    --miss: #ef476f;
+    --text: #e7e9ff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    height: 100%;
+    background: radial-gradient(circle at 50% 0%, #1c1e3a, var(--bg));
+    color: var(--text);
+    font-family: -apple-system, "Hiragino Sans", "Segoe UI", sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .app {
+    width: min(92vw, 460px);
+    text-align: center;
+  }
+  h1 {
+    font-size: 1.6rem;
+    letter-spacing: 0.15em;
+    margin-bottom: 4px;
+  }
+  .sub { color: #9aa0d0; font-size: 0.8rem; margin-bottom: 16px; }
+
+  .hud {
+    display: flex;
+    justify-content: space-around;
+    background: var(--panel);
+    border-radius: 14px;
+    padding: 12px 8px;
+    margin-bottom: 14px;
+  }
+  .hud .label { font-size: 0.65rem; color: #9aa0d0; letter-spacing: 0.1em; }
+  .hud .value { font-size: 1.4rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  #combo.hot { color: var(--accent); transform: scale(1.15); }
+  .hud .value { transition: transform 0.12s ease, color 0.12s ease; }
+
+  .timebar {
+    height: 8px;
+    background: var(--cell);
+    border-radius: 8px;
+    overflow: hidden;
+    margin-bottom: 16px;
+  }
+  #timefill {
+    height: 100%;
+    width: 100%;
+    background: linear-gradient(90deg, var(--hit), var(--accent));
+    transition: width 0.1s linear;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+    aspect-ratio: 1;
+  }
+  .cell {
+    background: var(--cell);
+    border-radius: 12px;
+    cursor: pointer;
+    transition: background 0.08s ease, transform 0.08s ease;
+  }
+  .cell:active { transform: scale(0.94); }
+  .cell.lit {
+    background: var(--accent);
+    box-shadow: 0 0 18px var(--accent);
+  }
+  .cell.hit { background: var(--hit); box-shadow: 0 0 18px var(--hit); }
+  .cell.miss { background: var(--miss); }
+
+  .overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(10, 11, 28, 0.88);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    backdrop-filter: blur(4px);
+  }
+  .overlay.hidden { display: none; }
+  .overlay h2 { font-size: 1.8rem; }
+  .overlay p { color: #9aa0d0; max-width: 280px; line-height: 1.6; }
+  .btn {
+    background: var(--accent);
+    color: #1a1c33;
+    border: none;
+    font-size: 1.1rem;
+    font-weight: 700;
+    padding: 14px 36px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: transform 0.1s ease;
+  }
+  .btn:active { transform: scale(0.95); }
+  .best { color: var(--accent); font-weight: 700; }
+</style>
+</head>
+<body>
+<div class="app">
+  <h1>REFLEX&nbsp;GRID</h1>
+  <div class="sub">光ったマスを素早くタップ！</div>
+
+  <div class="hud">
+    <div><div class="label">SCORE</div><div class="value" id="score">0</div></div>
+    <div><div class="label">COMBO</div><div class="value" id="combo">0</div></div>
+    <div><div class="label">BEST</div><div class="value" id="best">0</div></div>
+  </div>
+
+  <div class="timebar"><div id="timefill"></div></div>
+
+  <div class="grid" id="grid"></div>
+</div>
+
+<div class="overlay" id="overlay">
+  <h2 id="ovTitle">リフレックス・グリッド</h2>
+  <p id="ovText">光ったマスをできるだけ早くタップしてスコアを稼ごう。逃すとコンボがリセット、ミスタップは減点。制限時間は30秒！</p>
+  <button class="btn" id="startBtn">スタート</button>
+</div>
+
+<script>
+const GRID_SIZE = 16;
+const GAME_TIME = 30; // seconds
+const grid = document.getElementById('grid');
+const scoreEl = document.getElementById('score');
+const comboEl = document.getElementById('combo');
+const bestEl = document.getElementById('best');
+const timefill = document.getElementById('timefill');
+const overlay = document.getElementById('overlay');
+const ovTitle = document.getElementById('ovTitle');
+const ovText = document.getElementById('ovText');
+const startBtn = document.getElementById('startBtn');
+
+let cells = [];
+let score = 0, combo = 0, maxCombo = 0;
+let activeIndex = -1;
+let litAt = 0;
+let spawnTimer = null;
+let expireTimer = null;
+let timeLeft = GAME_TIME;
+let timeTimer = null;
+let playing = false;
+
+// localStorage can throw (sandboxed preview, file://, private mode).
+// Wrap it so a failure here never stops the rest of the script from running.
+function loadBest() {
+  try { return parseInt(localStorage.getItem('reflexBest') || '0', 10) || 0; }
+  catch (e) { return 0; }
+}
+function saveBest(v) {
+  try { localStorage.setItem('reflexBest', v); } catch (e) { /* ignore */ }
+}
+
+let best = loadBest();
+bestEl.textContent = best;
+
+// build grid
+for (let i = 0; i < GRID_SIZE; i++) {
+  const c = document.createElement('div');
+  c.className = 'cell';
+  c.dataset.i = i;
+  c.addEventListener('pointerdown', () => onTap(i));
+  grid.appendChild(c);
+  cells.push(c);
+}
+
+// difficulty: lit window shrinks as score grows
+function litWindow() {
+  return Math.max(450, 1100 - score * 8);
+}
+
+function spawn() {
+  let next;
+  do { next = Math.floor(Math.random() * GRID_SIZE); } while (next === activeIndex);
+  activeIndex = next;
+  cells[next].classList.add('lit');
+  litAt = performance.now();
+
+  const window = litWindow();
+  expireTimer = setTimeout(() => {
+    // missed it
+    cells[next].classList.remove('lit');
+    cells[next].classList.add('miss');
+    setTimeout(() => cells[next].classList.remove('miss'), 200);
+    activeIndex = -1;
+    breakCombo();
+    spawn();
+  }, window);
+}
+
+function onTap(i) {
+  if (!playing) return;
+  if (i !== activeIndex) {
+    // wrong tap = penalty
+    score = Math.max(0, score - 1);
+    scoreEl.textContent = score;
+    breakCombo();
+    cells[i].classList.add('miss');
+    setTimeout(() => cells[i].classList.remove('miss'), 200);
+    return;
+  }
+  // hit!
+  clearTimeout(expireTimer);
+  const reaction = performance.now() - litAt;
+  cells[i].classList.remove('lit');
+  cells[i].classList.add('hit');
+  setTimeout(() => cells[i].classList.remove('hit'), 150);
+
+  combo++;
+  maxCombo = Math.max(maxCombo, combo);
+  // faster reaction = more points, plus combo bonus
+  const speedBonus = reaction < 350 ? 3 : reaction < 600 ? 2 : 1;
+  const comboBonus = Math.floor(combo / 5);
+  score += speedBonus + comboBonus;
+
+  scoreEl.textContent = score;
+  comboEl.textContent = combo;
+  comboEl.classList.toggle('hot', combo >= 5);
+
+  activeIndex = -1;
+  spawn();
+}
+
+function breakCombo() {
+  combo = 0;
+  comboEl.textContent = 0;
+  comboEl.classList.remove('hot');
+}
+
+function tick() {
+  timeLeft -= 0.1;
+  if (timeLeft <= 0) { timeLeft = 0; endGame(); }
+  timefill.style.width = (timeLeft / GAME_TIME * 100) + '%';
+}
+
+function startGame() {
+  clearTimeout(expireTimer);
+  clearInterval(timeTimer);
+  cells.forEach(c => c.classList.remove('lit', 'hit', 'miss'));
+  score = 0; combo = 0; maxCombo = 0; timeLeft = GAME_TIME; activeIndex = -1;
+  scoreEl.textContent = 0;
+  comboEl.textContent = 0;
+  comboEl.classList.remove('hot');
+  timefill.style.width = '100%';
+  overlay.classList.add('hidden');
+  playing = true;
+  spawn();
+  timeTimer = setInterval(tick, 100);
+}
+
+function endGame() {
+  playing = false;
+  clearTimeout(expireTimer);
+  clearInterval(timeTimer);
+  cells.forEach(c => c.classList.remove('lit'));
+
+  const isNewBest = score > best;
+  if (isNewBest) {
+    best = score;
+    saveBest(best);
+    bestEl.textContent = best;
+  }
+
+  ovTitle.textContent = isNewBest ? '🎉 ハイスコア更新！' : 'タイムアップ！';
+  ovText.innerHTML =
+    `スコア <span class="best">${score}</span><br>` +
+    `最大コンボ <span class="best">${maxCombo}</span><br>` +
+    `ベスト <span class="best">${best}</span>`;
+  startBtn.textContent = 'もう一回';
+  overlay.classList.remove('hidden');
+}
+
+startBtn.addEventListener('click', startGame);
+</script>
+</body>
+</html>
